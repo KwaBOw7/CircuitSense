@@ -1,0 +1,7 @@
+* Common-emitter bias: expect Ib=10uA, Ic=1mA, Vc=5V
+V1 vcc 0 10
+RB vcc b 930k
+RC vcc c 5k
+Q1 c b 0 QN
+.model QN NPN(BF=100)
+.end

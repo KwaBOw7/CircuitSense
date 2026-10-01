@@ -1,0 +1,5 @@
+* KiCad-style SPICE netlist: RC low-pass, fc = 1 kHz
+V1 /VIN 0 dc 0 ac 1 sin(0 1 1k)
+R1 /VIN /VOUT 1k
+C1 /VOUT 0 159.155n
+.end
