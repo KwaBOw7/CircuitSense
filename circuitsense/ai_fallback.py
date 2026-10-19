@@ -9,8 +9,15 @@ PROMPT = ('This image is a crop of ONE electrical schematic symbol. Return JSON 
           '"reversed": true if the left/top terminal is the negative/cathode side}.')
 _model = None
 
-def _http(url, body=None):
-    req = urllib.request.Request(url, json.dumps(body).encode() if body else None, {"Content-Type": "application/json"})
+def _http(url, body=None, key=None):
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["x-goog-api-key"] = key
+    req = urllib.request.Request(
+        url,
+        json.dumps(body).encode() if body else None,
+        headers,
+    )
     try:
         with urllib.request.urlopen(req, timeout=40) as r: return json.load(r)
     except urllib.error.HTTPError as e:
