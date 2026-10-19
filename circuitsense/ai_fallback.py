@@ -2,7 +2,7 @@
 Set GEMINI_API_KEY. Optional: GEMINI_MODEL to force a model (otherwise the newest Flash model your key can use is picked)."""
 import os, json, base64, urllib.request, urllib.error
 KINDS = {"R", "C", "L", "V", "I", "D", "LED", "UNKNOWN"}
-PREFER = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash", "gemini-flash-latest"]
+PREFER = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash", "gemini-flash-latest"]
 BASE = "https://generativelanguage.googleapis.com/v1beta"
 PROMPT = ('This image is a crop of ONE electrical schematic symbol. Return JSON only: '
           '{"kind": one of R,C,L,V,I,D,LED,UNKNOWN, "value": number in SI units or null, '
