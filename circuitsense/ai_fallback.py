@@ -1,68 +1,109 @@
-"""Gemini access. The AI identifies unknown symbols and explains solver output; it never calculates.
-Set GEMINI_API_KEY. Optional: GEMINI_MODEL to force a model (otherwise the newest Flash model your key can use is picked)."""
-import os, json, base64, urllib.request, urllib.error
-KINDS = {"R", "C", "L", "V", "I", "D", "LED", "UNKNOWN"}
-PREFER = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3-flash", "gemini-2.5-flash", "gemini-flash-latest"]
-BASE = "https://generativelanguage.googleapis.com/v1beta"
-PROMPT = ('This image is a crop of ONE electrical schematic symbol. Return JSON only: '
-          '{"kind": one of R,C,L,V,I,D,LED,UNKNOWN, "value": number in SI units or null, '
-          '"reversed": true if the left/top terminal is the negative/cathode side}.')
-_model = None
 
-def _http(url, body=None, key=None):
-    headers = {"Content-Type": "application/json"}
-    if key:
-        headers["x-goog-api-key"] = key
-    req = urllib.request.Request(
-        url,
-        json.dumps(body).encode() if body else None,
-        headers,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=40) as r: return json.load(r)
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"HTTP {e.code}: {e.read().decode(errors='replace')[:300]}")
+    
+  
+    response = _http(f"{BASE}/models?pageSize=200", key=key)
+    names = [
+        item["name"].split("/")[-1]
+        for item in response.get("models", [])
+        if "generateContent" in item.get("supportedGenerationMethods", [])
+        and item.get("name")
+    ]
 
-def _pick(key, refresh=False):
-    global _model
-    if os.getenv("GEMINI_MODEL"): return os.environ["GEMINI_MODEL"]
-    if _model and not refresh: return _model
-    names = [m["name"].split("/")[-1] for m in _http(f"{BASE}/models?key={key}&pageSize=200").get("models", [])
-             if "generateContent" in m.get("supportedGenerationMethods", [])]
-    flash = [n for n in names if "flash" in n and not any(w in n for w in ("image", "tts", "live", "audio", "lite", "thinking", "exp"))]
-    _model = next((p for p in PREFER if p in names), None) or (sorted(flash)[-1] if flash else (names[0] if names else None))
-    if not _model: raise RuntimeError("No Gemini model with generateContent is available for this key")
+    flash = [
+        name for name in names
+        if "flash" in name.lower()
+        and not any(term in name.lower() for term in (
+            "image", "tts", "live", "audio", "lite", "thinking", "exp", "preview"
+        ))
+    ]
+    _model = next((candidate for candidate in PREFER if candidate in names), None)
+    if not _model:
+        # If Google's model list changes, prefer an available Flash model.
+        _model = flash[0] if flash else (names[0] if names else None)
+    if not _model:
+        raise RuntimeError("No Gemini model with generateContent is available for this key")
     return _model
+
 
 def _generate(parts, as_json):
     key = os.getenv("GEMINI_API_KEY")
-    if not key: raise RuntimeError("GEMINI_API_KEY is not set")
+    if not key:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
     body = {"contents": [{"parts": parts}]}
-    if as_json: body["generationConfig"] = {"response_mime_type": "application/json"}
+    if as_json:
+        body["generationConfig"] = {"response_mime_type": "application/json"}
+
     try:
-        try: d = _http(f"{BASE}/models/{_pick(key)}:generateContent?key={key}", body)
-        except RuntimeError as e:
-            if "HTTP 404" not in str(e) or os.getenv("GEMINI_MODEL"): raise
-            d = _http(f"{BASE}/models/{_pick(key, True)}:generateContent?key={key}", body)   # stale model name: re-discover
-        out = d["candidates"][0]["content"]["parts"][0]["text"]
-        return json.loads(out) if as_json else out
-    except RuntimeError as e:
-        raise RuntimeError(f"Gemini call failed ({_model}): {e}")
-    except (KeyError, IndexError, ValueError) as e:
-        raise RuntimeError(f"Gemini returned an unexpected response: {type(e).__name__}")
+        try:
+            selected = _pick(key)
+            result = _http(
+                f"{BASE}/models/{selected}:generateContent",
+                body,
+                key=key,
+            )
+        except RuntimeError as exc:
+            # A model can become unavailable after being listed. Rediscover once
+            # on a 404, unless the operator explicitly pinned GEMINI_MODEL.
+            if "HTTP 404" not in str(exc) or os.getenv("GEMINI_MODEL"):
+                raise
+            selected = _pick(key, refresh=True)
+            result = _http(
+                f"{BASE}/models/{selected}:generateContent",
+                body,
+                key=key,
+            )
+
+        output = result["candidates"][0]["content"]["parts"][0]["text"]
+        return json.loads(output) if as_json else output
+    except RuntimeError as exc:
+        raise RuntimeError(f"Gemini call failed ({_model or 'model discovery'}): {exc}") from exc
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        raise RuntimeError(
+            f"Gemini returned an unexpected response: {type(exc).__name__}"
+        ) from exc
+
 
 def generate(text, as_json=False):
+    """Generate a text response, optionally requiring a JSON response."""
     return _generate([{"text": text}], as_json)
 
+
 def resolve(png: bytes):
-    """Identify ONE unrecognised symbol crop -> {'kind','value','reversed'} or None."""
-    if not os.getenv("GEMINI_API_KEY"): return None
-    try:
-        d = _generate([{"text": PROMPT}, {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(png).decode()}}], True)
-    except RuntimeError:
+    """Identify one unrecognised symbol crop or return None when unavailable."""
+    if not os.getenv("GEMINI_API_KEY"):
         return None
-    return d if isinstance(d, dict) and d.get("kind") in KINDS else None
+    try:
+        result = _generate(
+            [
+                {"text": PROMPT},
+                {
+                    "inline_data": {
+                        "mime_type": "image/png",
+                        "data": base64.b64encode(png).decode("ascii"),
+                    }
+                },
+            ],
+            True,
+        )
+    except RuntimeError:
+        # Recognition must remain functional without the optional AI fallback.
+        return None
+    return result if isinstance(result, dict) and result.get("kind") in KINDS else None
 
 
 def generate_image(text, png: bytes, as_json=False):
-    return _generate([{"text": text}, {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(png).decode()}}], as_json)
+    """Generate a response using text plus an image, such as a ladder diagram."""
+    return _generate(
+        [
+            {"text": text},
+            {
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": base64.b64encode(png).decode("ascii"),
+                }
+            },
+        ],
+        as_json,
+    )
+
